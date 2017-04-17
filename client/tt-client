@@ -1,0 +1,141 @@
+#!/usr/bin/env python
+
+import sys
+import os
+import hashlib
+import glob
+sys.path.append('gen-py')
+
+from cse124 import TritonTransfer
+from cse124.ttypes import *
+
+from thrift import Thrift
+from thrift.transport import TSocket
+from thrift.transport import TTransport
+from thrift.protocol import TBinaryProtocol
+
+args = len(sys.argv)
+if args<5:
+  print " tt-client <server_name> <server_port> download <filename> <download_dir>"
+  print "tt-client <server_name> <server_port> upload <filename>"
+  exit()
+else:
+  aglist=str(sys.argv)
+  servername = str(sys.argv[1])
+  serverport =str(sys.argv[2])
+  opt = str(sys.argv[3])
+  filename = str(sys.argv[4])
+  if opt=="download":
+    savedir= str(sys.argv[5])
+
+serverport = int(serverport)
+
+
+transport = TSocket.TSocket(servername,serverport)
+
+  # Buffering is critical. Raw sockets are very slow
+transport = TTransport.TBufferedTransport(transport)
+
+  # Wrap in a protocol
+protocol = TBinaryProtocol.TBinaryProtocol(transport)
+
+  # Create a client to use the protocol encoder
+client = TritonTransfer.Client(protocol)
+
+  # Connect!
+transport.open()
+
+client.ping()
+ 
+global head
+global backup
+backup = {}
+
+if opt=="upload":
+  fileblocks={}
+  hashlist=[]
+  hasher = hashlib.sha256()
+  BLOCKSIZE = 16384
+  filename = os.path.abspath(filename)
+  with open(filename, 'rb') as afile:
+    buf = afile.read(BLOCKSIZE)
+    while len(buf) >0:
+      hasher.update(buf)
+      hash1=hasher.digest()
+      hashlist.append(hash1)
+      upd = {hash1:buf}
+      fileblocks.update(upd)
+      buf = afile.read(BLOCKSIZE) 
+
+  head, tail = os.path.split(filename)
+  ret1 = client.uploadFile(tail, hashlist)
+  
+  ip1 = ret1[0]
+  port1 = int(ret1[1])
+  ip2 = ret1[2]
+  port2 = int(ret1[3])
+ 
+  for index in range(4,len(ret1)):
+    transport = TSocket.TSocket(ip1,port1)
+    transport = TTransport.TBufferedTransport(transport)
+    protocol = TBinaryProtocol.TBinaryProtocol(transport)
+    client1 = TritonTransfer.Client(protocol)
+    transport.open()
+    ret2 = client1.uploadBlock(ret1[index],fileblocks[ret1[index]])
+    if ret2=="OK":
+      client
+    transport.close()  
+ 
+    transport = TSocket.TSocket(ip2,port2)
+    transport = TTransport.TBufferedTransport(transport)
+    protocol = TBinaryProtocol.TBinaryProtocol(transport)
+    client2 = TritonTransfer.Client(protocol)
+    transport.open()
+    ret2 = client2.uploadBlock(ret1[index],fileblocks[ret1[index]])
+    print ret2
+    transport.close()
+elif opt=="download":
+  #filename = os.path.abspath(filename)
+  head,tail = os.path.split(filename)
+  ret3 = client.downloadFile(tail)
+  out="" 
+  sum1=0
+  savedir = os.path.abspath(savedir)
+  sdir = savedir+'/*'
+  files = glob.glob(sdir)
+  for filen in files:
+    hasher = hashlib.sha256()
+    BLOCKSIZE = 16384
+    with open(filen, 'rb') as afile:
+      buf = afile.read(BLOCKSIZE)
+      while len(buf) >0:
+        hasher.update(buf)
+        hash1=hasher.digest()
+        upd = {hash1:buf}
+        backup.update(upd)    
+        buf = afile.read(BLOCKSIZE) 
+        
+  for index in range(0,len(ret3),5):
+    tmp = index
+    if ret3[index] in backup.keys():
+       out = out+backup[ret3[index]]
+    else:
+      transport = TSocket.TSocket(ret3[tmp+1],int(ret3[tmp+2]))
+      transport = TTransport.TBufferedTransport(transport)
+      protocol = TBinaryProtocol.TBinaryProtocol(transport)
+      client2 = TritonTransfer.Client(protocol)
+      transport.open()
+      ret4 = client2.downloadBlock(ret3[index])
+
+      tmp = {ret3[index]:ret4}
+      sum1 = sum1+len(ret4)
+      out = out+ret4
+      backup.update(tmp)
+ 
+  pathfile=os.path.join(savedir,filename)
+  pathfile = os.path.abspath(pathfile)
+  target = open(pathfile, 'w')
+  target.truncate()
+  target.write(out)
+  target.close()
+  
